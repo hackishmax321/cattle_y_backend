@@ -12,3 +12,4 @@ textblob
 requests
 google-cloud-firestore
 scikit-learn
+statsmodels
