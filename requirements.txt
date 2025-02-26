@@ -13,3 +13,4 @@ requests
 google-cloud-firestore
 scikit-learn
 statsmodels
+python-multipart
