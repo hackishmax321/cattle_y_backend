@@ -11,3 +11,4 @@ geopy
 textblob
 requests
 google-cloud-firestore
+scikit-learn
