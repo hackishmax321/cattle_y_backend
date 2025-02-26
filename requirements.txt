@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+bcrypt
+pydantic
+numpy
+tensorflow
+pillow
+pandas
+joblib
+geopy
+textblob
+requests
+google-cloud-firestore
