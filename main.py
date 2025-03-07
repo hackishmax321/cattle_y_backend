@@ -17,12 +17,12 @@ import traceback
 from geopy.distance import geodesic
 import requests
 from textblob import TextBlob
+from chat import init_chat
 
 app = FastAPI()
 origins = [
     "http://localhost:3000",
-    "http://localhost:3001",
-    "https://cattle-y-frontend.onrender.com"
+    "http://localhost:3001"
 ]
 app.add_middleware(
     CORSMiddleware,
@@ -31,6 +31,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Initialize chat module
+socket_manager = init_chat(app)
 
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -148,21 +151,93 @@ async def delete_cattle(cattle_id: str):
     cattle_ref.delete()
     return {"message": "Cattle deleted successfully"}
 
+class CattleUpdate(BaseModel):
+    health: str | None = None
+    status: str | None = None
+
 @app.put("/cattle/{cattle_id}")
-async def update_cattle(cattle_id: str, health: Optional[str] = None, status: Optional[str] = None):
-    cattle_ref = db.collection("cattle").document(cattle_id)
-    if not cattle_ref.get().exists:
-        raise HTTPException(status_code=404, detail="Cattle not found")
-    update_data = {}
-    if health:
-        update_data["health"] = health
-    if status:
-        update_data["status"] = status
-    cattle_ref.update(update_data)
-    return {"message": "Cattle updated successfully"}
+async def update_cattle(cattle_id: str, cattle_data: CattleUpdate):
+    try:
+        cattle_ref = db.collection("cattle").document(cattle_id)
+        
+        # Check if the cattle document exists
+        if not cattle_ref.get().exists:
+            raise HTTPException(status_code=404, detail="Cattle not found")
+
+        # Prepare the update data
+        update_data = cattle_data.dict(exclude_unset=True)
+
+        # Ensure there is at least one field to update
+        if not update_data:
+            raise HTTPException(status_code=400, detail="No fields provided for update")
+
+        # Perform the update
+        cattle_ref.update(update_data)
+        return {"message": "Cattle updated successfully"}
+    except Exception as e:
+        error_trace = traceback.format_exc()
+        print(f"Error: {e}\nTraceback:\n{error_trace}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
+# Appoinement s 
+class Appointment(BaseModel):
+    title: str
+    date: str  # Stored in "YYYY-MM-DD" format
+    time: str  # Stored as a string, e.g., "14:30"
+    message: str | None = None
+    username: str  # Dummy user field
+    accepted: bool = False  # Default value
 
+# Function to sort by latest date
+def sort_appointments_by_date(appointments):
+    return sorted(appointments, key=lambda x: x["date"], reverse=True)
+
+# ✅ Endpoint to Create an Appointment
+@app.post("/appointments")
+async def create_appointment(appointment: Appointment):
+    try:
+        appointment_data = appointment.dict()
+        doc_ref = db.collection("appointments").document()
+        doc_ref.set(appointment_data)
+
+        return {"message": "Appointment created successfully", "appointment_id": doc_ref.id}
+    except Exception as e:
+        error_trace = traceback.format_exc()
+        print(f"Error: {e}\nTraceback:\n{error_trace}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+# ✅ Endpoint to Get All Appointments (Sorted by Date)
+@app.get("/appointments", response_model=List[Appointment])
+async def get_all_appointments():
+    try:
+        appointments_ref = db.collection("appointments").stream()
+        appointments = [doc.to_dict() for doc in appointments_ref]
+
+        if not appointments:
+            raise HTTPException(status_code=404, detail="No appointments found")
+
+        return sort_appointments_by_date(appointments)
+    except Exception as e:
+        error_trace = traceback.format_exc()
+        print(f"Error: {e}\nTraceback:\n{error_trace}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+# ✅ Endpoint to Get Appointments for a Specific User (Sorted by Date)
+@app.get("/appointments/user/{username}", response_model=List[Appointment])
+async def get_appointments_by_user(username: str):
+    try:
+        appointments_ref = db.collection("appointments").where("username", "==", username).stream()
+        user_appointments = [doc.to_dict() for doc in appointments_ref]
+
+        if not user_appointments:
+            raise HTTPException(status_code=404, detail="No appointments found for this user")
+
+        return sort_appointments_by_date(user_appointments)
+    except Exception as e:
+        error_trace = traceback.format_exc()
+        print(f"Error: {e}\nTraceback:\n{error_trace}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 # Predict Pests and Diseases
@@ -505,7 +580,7 @@ def get_nearby_locations(latitude: float, longitude: float, radius: int = 5000):
             })
 
         # Sort locations by polarity_score, highest to lowest (undefined comes last)
-        locations.sort(key=lambda x: (x['polarity_score'] is None, -x['polarity_score'] if x['polarity_score'] is not None else float('inf')))
+        # locations.sort(key=lambda x: (x['polarity_score'] is None, -x['polarity_score'] if x['polarity_score'] is not None else float('inf')))
         
         return locations
     else:
