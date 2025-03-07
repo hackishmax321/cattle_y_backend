@@ -17,7 +17,7 @@ import traceback
 from geopy.distance import geodesic
 import requests
 from textblob import TextBlob
-from chat import init_chat
+# from chat import init_chat
 
 app = FastAPI()
 origins = [
@@ -33,7 +33,7 @@ app.add_middleware(
 )
 
 # Initialize chat module
-socket_manager = init_chat(app)
+# socket_manager = init_chat(app)
 
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
