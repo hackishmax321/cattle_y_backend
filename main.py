@@ -450,6 +450,7 @@ class MilkRecord(BaseModel):
     cattle_id: str
     amount: float = 0.0
     status: str = "ok"
+    feedback: Optional[str] = "No feedback"
 
 class DailyMilkSummary(BaseModel):
     predicted_total: Optional[float] = 0.0
@@ -487,6 +488,32 @@ async def delete_milk_record(username: str, date_str: str, record_id: str):
         raise HTTPException(status_code=404, detail="Milk record not found")
     record_ref.delete()
     return {"message": "Milk record deleted successfully"}
+
+@app.get("/milk-records/{username}")
+async def get_all_milk_records(username: str):
+    user_milk_summary_ref = db.collection("users").document(username).collection("daily-milk-summary")
+    
+    # Retrieve all daily summaries and sort them in descending order based on the date_str in document ID (YYYY-MM-DD)
+    date_docs = sorted(
+        user_milk_summary_ref.stream(), 
+        key=lambda doc: doc.id, 
+        reverse=True  # Sort in descending order
+    )
+
+    all_records = []
+    
+    for date_doc in date_docs:
+        date_str = date_doc.id  
+        milk_records_ref = user_milk_summary_ref.document(date_str).collection("milk-records")
+        milk_records = milk_records_ref.stream()
+
+        for record in milk_records:
+            record_data = record.to_dict()
+            record_data["record_id"] = record.id
+            record_data["date"] = date_str  # Attach date to the record
+            all_records.append(record_data)
+
+    return {"message": "Milk records retrieved", "records": all_records}
 
 
 # Locate Vets   
