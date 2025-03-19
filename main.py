@@ -2,7 +2,7 @@
 from fastapi import FastAPI, HTTPException, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import bcrypt
 from typing import List, Optional
 import os
@@ -43,13 +43,14 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 db = get_firestore_client()
 
 # Google Maps Configs
-GOOGLE_API_KEY = 'AIzaSyDAsJYZSQ92_NQAz9kiSpW1XpyuCxRl_uI'
+GOOGLE_API_KEY = 'AIzaSyDoaoxfgJdFuzPIwhS_w1I_bOVm7DxPXXM'
 GOOGLE_PLACES_URL = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
 GOOGLE_DETAILS_URL = "https://maps.googleapis.com/maps/api/place/details/json"
 
 
 # Load MOdels Health
 MODEL_HEALTH = joblib.load('model_health_random_f_classifier.joblib')
+MODEL_HEALTH_FOCUSED = joblib.load('model_health_random_f_classifier_foused.joblib')
 LABEL_ENCODER =  joblib.load('label_encoder_health_status.joblib')
 
 # Load Milk Quality Checker
@@ -70,10 +71,11 @@ CLASS_PESTS = ['Mastitis', ' Tick Infestation', 'Dermatophytosis (RINGWORM)', 'F
 class User(BaseModel):
     username: str
     full_name: str
-    email:str
+    email: str
     contact: str
     password: str
     nic: str
+    role: str = Field(default="Farmer")
 
 class LoginUser(BaseModel):
     username: str
@@ -183,12 +185,13 @@ async def update_cattle(cattle_id: str, cattle_data: CattleUpdate):
 
 # Appoinement s 
 class Appointment(BaseModel):
+    id: Optional[str] = None
     title: str
-    date: str  # Stored in "YYYY-MM-DD" format
-    time: str  # Stored as a string, e.g., "14:30"
+    date: str  
+    time: str 
     message: str | None = None
-    username: str  # Dummy user field
-    accepted: bool = False  # Default value
+    username: str  
+    accepted: bool = False  
 
 # Function to sort by latest date
 def sort_appointments_by_date(appointments):
@@ -235,6 +238,43 @@ async def get_appointments_by_user(username: str):
             raise HTTPException(status_code=404, detail="No appointments found for this user")
 
         return sort_appointments_by_date(user_appointments)
+    except Exception as e:
+        error_trace = traceback.format_exc()
+        print(f"Error: {e}\nTraceback:\n{error_trace}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+@app.get("/appointments/title/{title}", response_model=List[Appointment])
+async def get_appointments_by_title(title: str):
+    """Fetch appointments by title and include document ID"""
+    try:
+        appointments_ref = db.collection("appointments").where("title", "==", title).stream()
+        
+        title_appointments = [
+            {**doc.to_dict(), "id": doc.id} for doc in appointments_ref
+        ]
+
+        if not title_appointments:
+            raise HTTPException(status_code=404, detail="No appointments found with this title")
+
+        return sort_appointments_by_date(title_appointments)
+    except Exception as e:
+        error_trace = traceback.format_exc()
+        print(f"Error: {e}\nTraceback:\n{error_trace}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+@app.delete("/appointments/{appointment_id}")
+async def delete_appointment(appointment_id: str):
+    """Delete an appointment by its document ID"""
+    try:
+        doc_ref = db.collection("appointments").document(appointment_id)
+        doc = doc_ref.get()
+
+        if not doc.exists:
+            raise HTTPException(status_code=404, detail="Appointment not found")
+
+        doc_ref.delete()
+        return {"message": "Appointment deleted successfully", "appointment_id": appointment_id}
+
     except Exception as e:
         error_trace = traceback.format_exc()
         print(f"Error: {e}\nTraceback:\n{error_trace}")
@@ -310,7 +350,24 @@ async def predict_health_status(input_data: HealthStatusInput):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred during prediction: {str(e)}")
     
+@app.get("/health-status")
+def check_health_status(body_temp: float, heart_rate: int, spo2: int):
+    """
+    Predicts if a person is healthy (1) or unhealthy (0) using a trained Random Forest model.
+    Returns confidence of prediction based on actual model probabilities.
+    """
+    features = np.array([[body_temp, heart_rate, spo2]])
+    
+    # Get prediction probabilities
+    probabilities = MODEL_HEALTH_FOCUSED.predict_proba(features)[0]  # Returns [prob_unhealthy, prob_healthy]
+    
+    # Determine predicted class (0 or 1)
+    prediction = np.argmax(probabilities)
+    
+    # Confidence is the probability of the predicted class
+    confidence = round(probabilities[prediction] * 100, 2)
 
+    return {"status": int(prediction), "confidence": confidence}
 
 # Milk Quality Monitor
 class MilkQualityInput(BaseModel):
