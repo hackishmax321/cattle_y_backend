@@ -1,5 +1,5 @@
 # main.py
-from fastapi import FastAPI, HTTPException, File, UploadFile
+from fastapi import FastAPI, HTTPException, File, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -18,6 +18,10 @@ from geopy.distance import geodesic
 import requests
 from textblob import TextBlob
 # from chat import init_chat
+from connction_manager import ConnectionManager
+from datetime import datetime
+import json
+
 
 app = FastAPI()
 origins = [
@@ -35,6 +39,7 @@ app.add_middleware(
 
 # Initialize chat module
 # socket_manager = init_chat(app)
+manager = ConnectionManager()
 
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -43,7 +48,7 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 db = get_firestore_client()
 
 # Google Maps Configs
-GOOGLE_API_KEY = 'AIzaSyDoaoxfgJdFuzPIwhS_w1I_bOVm7DxPXXM'
+GOOGLE_API_KEY = 'AIzaSyDTJjnuqF0J18Uu_Ft2TA5R13WsyyDbo4U'
 GOOGLE_PLACES_URL = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
 GOOGLE_DETAILS_URL = "https://maps.googleapis.com/maps/api/place/details/json"
 
@@ -280,7 +285,6 @@ async def delete_appointment(appointment_id: str):
         print(f"Error: {e}\nTraceback:\n{error_trace}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
-
 # Predict Pests and Diseases
 @app.post("/predict-pest")
 async def predict_pest(file: UploadFile = File(...)):
@@ -350,6 +354,7 @@ async def predict_health_status(input_data: HealthStatusInput):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred during prediction: {str(e)}")
     
+
 @app.get("/health-status")
 def check_health_status(body_temp: float, heart_rate: int, spo2: int):
     """
@@ -714,6 +719,69 @@ async def get_outlet(outlet_id: str):
     
     return doc.to_dict()
 
+# Chatting Endpoints 
+@app.websocket('/ws/{client_id}')
+async def websocket_endpoint(webSocket:WebSocket, client_id:str):
+    await manager.connect(webSocket)
+    now = datetime.now()
+    currenc_time = now.strftime("%H:%M")
 
+    try:
+        while True:
+            data = await webSocket.receive_text()
+            message = {"time": currenc_time, "client_id": client_id, "message": data}
+            await manager.broadcast(json.dumps(message))
+
+    except WebSocketDisconnect:
+        manager.disconnect(webSocket)
+        message = {"time": currenc_time, "client_id": client_id, "message": "Offline"}
+        await manager.broadcast(json.dumps(message))
+
+
+class ChatMessage(BaseModel):
+    sender: str
+    receiver: str
+    message: str
+    timestamp: str = None  # Will be set on the server
+
+@app.post("/chat-save")
+async def save_chat_message(chat: ChatMessage):
+    # Generate current date and time formatted as "YYYY-MM-DD HH:MM"
+    now = datetime.now()
+    current_timestamp = now.strftime("%Y-%m-%d %H:%M")
+    chat.timestamp = current_timestamp
+
+    # Save the chat message to a Firestore collection called "chats"
+    chat_ref = db.collection("chats").document()  # Auto-generated document id
+    chat_ref.set(chat.dict())
+
+    return {"status": "success", "message": "Chat message saved successfully"}
+
+@app.get("/chat/{username}/{receiver}")
+async def get_chat_messages(username: str, receiver: str):
+    # Query Firestore for messages where:
+    # Case 1: username is the sender and receiver is the given receiver.
+    sender_query = db.collection("chats") \
+        .where("sender", "==", username) \
+        .where("receiver", "==", receiver) \
+        .stream()
+
+    # Case 2: username is the receiver and sender is the given receiver.
+    receiver_query = db.collection("chats") \
+        .where("sender", "==", receiver) \
+        .where("receiver", "==", username) \
+        .stream()
+
+    # Merge the two query results.
+    messages = []
+    for doc in sender_query:
+        messages.append(doc.to_dict())
+    for doc in receiver_query:
+        messages.append(doc.to_dict())
+
+    # Sort messages by timestamp (assuming "YYYY-MM-DD HH:MM" format allows lexicographical sorting)
+    messages.sort(key=lambda msg: msg.get("timestamp", ""))
+    
+    return {"status": "success", "data": messages}
 
 
